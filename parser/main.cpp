@@ -1,9 +1,11 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
-#include <map>
+#include <fstream>
 
 #include <boost/iostreams/stream.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
+#include <boost/iostreams/filter/newline.hpp>
 #include <boost/iostreams/device/mapped_file.hpp>
 #include <boost/program_options.hpp>
 
@@ -44,7 +46,7 @@ std::string_view get_event(std::string_view s) {
 	return s.substr(timestamp_end + 2);
 }
 
-void process_line(uint64_t index, std::string_view line) {
+combat_event process_line(std::ostream &out, uint64_t index, std::string_view line) {
 	auto params = split_parameters(get_event(line));
 
 	combat_event e;
@@ -54,6 +56,7 @@ void process_line(uint64_t index, std::string_view line) {
 
 	if (e.prefix_type != subevent_prefix_type::unknown && e.suffix_type != subevent_suffix_type::unknown) {
 		parse_parameters(params, e.base, 1);
+		write_parameters<200>(out, e.base);
 
 		auto offset = 1 + std::tuple_size_v<base_parameters>;
 
@@ -76,10 +79,7 @@ void process_line(uint64_t index, std::string_view line) {
 			}
 
 			case subevent_prefix_type::environmental: {
-				e.prefix = environmental_parameters();
-				parse_parameters(params, std::get<environmental_parameters>(*e.prefix), offset);
-				offset += std::tuple_size_v<environmental_parameters>;
-				break;
+				return e;
 			}
 
 			default:
@@ -113,10 +113,13 @@ void process_line(uint64_t index, std::string_view line) {
 				throw std::runtime_error("process_line: fatal exception; unreachable code");
 		}
 	}
+
+	return e;
 }
 
 int main(int argc, char **argv) {
 	std::string path;
+	int report_progress = 0;
 
 	try {
 		boost::program_options::options_description general("general");
@@ -124,6 +127,8 @@ int main(int argc, char **argv) {
 				("help,h", "prints this help message")
 				("version,v", "prints version information")
 				("verbose,x", "write logging information")
+				("progress,p", boost::program_options::value<int>(&report_progress),
+				 "reports progress every arg percent")
 				("combat-log,L", boost::program_options::value<std::string>(&path)->default_value(win_log_path),
 				 "path to the log file");
 
@@ -149,30 +154,36 @@ int main(int argc, char **argv) {
 	try {
 		boost::iostreams::mapped_file_source file_source(path);
 		boost::iostreams::stream<boost::iostreams::mapped_file_source> stream(file_source, std::ios::binary);
+		std::ofstream out_file("output.wcl", std::ios::binary | std::ios::out);
 
 		if (!stream.is_open()) {
 			return 1;
 		}
 
-		std::cout << "Successfully opened memory mapped file\n"
-		          << "\tPath: " << path << "\n"
-		          << "\tSize: " << stream->size() / 1024 / 1024 << " MB\n"
-		          << "\tAlignment: " << stream->alignment() / 1024 << " KB\n";
-
-		auto start = std::chrono::system_clock::now();
 		std::string line;
 		uint64_t line_index = 0;
+		uint64_t bytes_read = 0;
+		uint64_t size = stream->size();
+		uint64_t progress = 0;
+		uint64_t progress_tick = size / 100 * report_progress;
+		auto start = std::chrono::system_clock::now();
 
 		while (std::getline(stream, line, '\r')) {
-			process_line(++line_index, line);
-			stream.seekg(1, std::ios::cur); // skip \n
+			process_line(out_file, ++line_index, line);
+			stream.seekg(1, std::ios::cur);
+			bytes_read += line.size() + 2;
+
+			if (report_progress && bytes_read / progress_tick > progress) {
+				std::cout << ++progress * report_progress << "% complete"
+				          << " (" << bytes_read << " / " << size << " bytes read)"
+				          << std::endl;
+			}
 		}
 
 		auto end = std::chrono::system_clock::now();
 		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-		std::cout << "parsing finished in " << duration.count() << "ms"
-		          << " (" << line_index << " lines)\n";
+		std::cout << "parsing finished in " << float(duration.count()) / 1000 << " sec\n";
 	} catch (std::exception &e) {
 		std::cerr << "[ERR] " << e.what() << std::endl;
 	}

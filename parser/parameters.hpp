@@ -8,6 +8,8 @@
 #include <concepts>
 #include <string>
 #include <tuple>
+#include <ostream>
+#include <type_traits>
 
 /*!
  * absenced of parameters
@@ -74,7 +76,7 @@ float convert_parameter(std::string_view s) {
 	}
 
 	float result = 0.0f;
-	auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
+	auto[p, ec] = std::from_chars(s.data(), s.data() + s.size(), result);
 	if (ec != std::errc()) {
 		std::cerr << "convert_parameter<float>: invalid floating point: " << s << std::endl;
 	}
@@ -115,5 +117,22 @@ void parse_parameters(const S &parameters, T &dst, size_t offset = 0) {
 			std::get<I>(dst) = convert_parameter<std::tuple_element<I, T>::type>(parameters[offset + I]);
 			parse_parameters<T, S, I + 1>(parameters, dst, offset);
 		}
+	}
+}
+
+template<typename T>
+requires std::is_trivially_copyable<T>::value
+void write_parameter(std::ostream &out, T param) {
+	out.write(reinterpret_cast<const char *>(&param), sizeof(T));
+}
+
+template<size_t B, typename T, size_t I = 0>
+void write_parameters(std::ostream &out, const T &params) {
+	if constexpr (I < std::tuple_size_v<T>) {
+		write_parameter<typename std::tuple_element<I, T>::type>(out, std::get<I>(params));
+		write_parameters<B - sizeof(typename std::tuple_element<I, T>::type), T, I + 1>(out, params);
+	} else {
+		constexpr char pad[B] = {0};
+		out.write(pad, sizeof(pad));
 	}
 }

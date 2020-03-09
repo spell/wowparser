@@ -1,3 +1,8 @@
 # CLion
 .idea
 cmake-build-*
+
+# Visual Studio (with CMake)
+out
+.vs
+CMakeSettings.json
