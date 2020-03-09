@@ -5,9 +5,12 @@
 
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/mapped_file.hpp>
+#include <boost/program_options.hpp>
 
 #include "parameters.hpp"
 #include "event.hpp"
+
+constexpr auto win_log_path = R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs\WoWCombatLog.txt)";
 
 std::vector<std::string_view> split_parameters(std::string_view s) {
 	int last_index = 0;
@@ -41,7 +44,7 @@ std::string_view get_event(std::string_view s) {
 	return s.substr(timestamp_end + 2);
 }
 
-void process_line(std::string_view line) {
+void process_line(uint64_t index, std::string_view line) {
 	auto params = split_parameters(get_event(line));
 
 	combat_event e;
@@ -112,10 +115,39 @@ void process_line(std::string_view line) {
 	}
 }
 
-int main() {
+int main(int argc, char **argv) {
+	std::string path;
+
 	try {
-		boost::iostreams::mapped_file_source file_source(
-				R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs\WoWCombatLog.txt)");
+		boost::program_options::options_description general("general");
+		general.add_options()
+				("help,h", "prints this help message")
+				("version,v", "prints version information")
+				("verbose,x", "write logging information")
+				("combat-log,L", boost::program_options::value<std::string>(&path)->default_value(win_log_path),
+				 "path to the log file");
+
+		// parse program options
+		boost::program_options::variables_map vm;
+		boost::program_options::store(boost::program_options::parse_command_line(argc, argv, general), vm);
+		boost::program_options::notify(vm);
+
+		if (vm.count("help")) {
+			std::cout << general << std::endl;
+			return 0;
+		}
+
+		if (vm.count("version")) {
+			std::cout << "wowparser v0.1.0-alpha" << std::endl;
+			return 0;
+		}
+	} catch (std::exception &e) {
+		std::cerr << "[ERR] could not parse arguments: " << e.what() << std::endl;
+		return 1;
+	}
+
+	try {
+		boost::iostreams::mapped_file_source file_source(path);
 		boost::iostreams::stream<boost::iostreams::mapped_file_source> stream(file_source, std::ios::binary);
 
 		if (!stream.is_open()) {
@@ -123,7 +155,8 @@ int main() {
 		}
 
 		std::cout << "Successfully opened memory mapped file\n"
-		          << "\tSize: " << stream->size() / 1024 / 1024 << "MB\n"
+		          << "\tPath: " << path << "\n"
+		          << "\tSize: " << stream->size() / 1024 / 1024 << " MB\n"
 		          << "\tAlignment: " << stream->alignment() / 1024 << " KB\n";
 
 		auto start = std::chrono::system_clock::now();
@@ -131,13 +164,13 @@ int main() {
 		uint64_t line_index = 0;
 
 		while (std::getline(stream, line, '\r')) {
-			line_index++;
-			process_line(line);
+			process_line(++line_index, line);
 			stream.seekg(1, std::ios::cur); // skip \n
 		}
 
 		auto end = std::chrono::system_clock::now();
 		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
 		std::cout << "parsing finished in " << duration.count() << "ms"
 		          << " (" << line_index << " lines)\n";
 	} catch (std::exception &e) {
