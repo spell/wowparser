@@ -3,6 +3,9 @@
 #include <chrono>
 #include <map>
 
+#include <boost/iostreams/stream.hpp>
+#include <boost/iostreams/device/mapped_file.hpp>
+
 #include "reader.hpp"
 #include "parameters.hpp"
 #include "event.hpp"
@@ -35,7 +38,8 @@ std::vector<std::string_view> split_parameters(std::string_view s) {
 }
 
 std::string_view get_event(std::string_view s) {
-	return s.substr(s.find("  ") + 2);
+	auto timestamp_end = s.find("  ");
+	return s.substr(timestamp_end + 2);
 }
 
 void process_line(std::string_view line) {
@@ -111,15 +115,32 @@ void process_line(std::string_view line) {
 
 int main() {
 	try {
-		reader r(R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs\WoWCombatLog.txt)");
+		boost::iostreams::mapped_file_source file_source(
+				R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs\WoWCombatLog.txt)");
+		boost::iostreams::stream<boost::iostreams::mapped_file_source> stream(file_source, std::ios::binary);
+
+		if (!stream.is_open()) {
+			return 1;
+		}
+
+		std::cout << "Successfully opened memory mapped file\n"
+		          << "\tSize: " << stream->size() / 1024 / 1024 << "MB\n"
+		          << "\tAlignment: " << stream->alignment() / 1024 << " KB\n";
+
 		auto start = std::chrono::system_clock::now();
-		while (!r.eof()) {
-			process_line(r.read_line());
+		std::string line;
+		uint64_t line_index = 0;
+
+		while (std::getline(stream, line, '\r')) {
+			line_index++;
+			process_line(line);
+			stream.seekg(1, std::ios::cur); // skip \n
 		}
 
 		auto end = std::chrono::system_clock::now();
 		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-		std::cout << "parsing finished in " << duration.count() << "ms\n\n";
+		std::cout << "parsing finished in " << duration.count() << "ms"
+		          << " (" << line_index << " lines)\n";
 	} catch (std::exception &e) {
 		std::cerr << "[ERR] " << e.what() << std::endl;
 	}
