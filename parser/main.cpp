@@ -6,7 +6,6 @@
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/mapped_file.hpp>
 
-#include "reader.hpp"
 #include "parameters.hpp"
 #include "event.hpp"
 
